@@ -1,0 +1,1062 @@
+---
+title: "Effects Of Covid on the Resale Market"
+author: "Tong Wai Yee, Ho Zhi Yi"
+date: "27 November 2021"
+output:
+  html_document:
+    prettydoc::html_pretty:
+      theme: architect
+    highlight: espresso
+    # css: styles.css
+    # latex_engine: xelatex
+    # mainfont: Calibri Light
+    toc: yes
+    toc_float: 
+      collapsed: false
+      smooth_scroll: false
+    number_sections: false
+---
+
+```{r setup, include = F}
+knitr::opts_chunk$set(echo = T)
+```
+
+```{css, echo = F}
+h1 { color: rgb(62, 6, 148); }
+h2 { color: rgb(0, 104, 139); } 
+h3 { color: rgb(51, 122, 183); }
+
+body {font-family:  -apple-system, BlinkMacSystemFont, 
+                    "Segoe UI", Roboto, Ubuntu;
+      font-size: 12pt; }
+
+code { color: rgb(205,79,57) }
+
+.tocify-extend-page {height: 0 !important; }
+```
+
+## Problem Statement
+
+In 2020, we witnessed the outbreak of the COVID-19 pandemic that led to a slew of measures imposed by the Singapore government in an attempt to control the rising cases in Singapore. Amongst the many affected include would-be home owners, who faced significant delays in their flat completion (Housing Development Board, 2021). 
+
+At the same time, we see a rising trend in the HDB Resale Price Index. Business Times (2021) also reported an increase in resale flat prices by nearly 11% in the 2nd quarter of 2021 as compared to the same period in 2020.
+
+This study aims to find the underlying reason(s) behind the increase in HDB Resale Prices, and whether the current COVID-19 situation had any influence on it. In particular, it studies the following:
+
+(1) the impact of the Circuit Breaker on resale prices over time (measured by number of months since the start of the Circuit Breaker)
+
+(2) the influence of Circuit Breaker on other factors affecting HDB resale prices
+
+
+For our data science project, we activated the following packages, using the `Tidyverse` approach.
+
+```{r}
+# Load necessary packages
+pacman::p_load(tidyverse, lubridate,
+               modelr, broom,
+               rvest, glue,
+               Hmisc, gvlma, car, psych,
+               ggthemes, scales, gridExtra, ggfortify,
+               jtools, huxtable, interactions,
+               gtrendsR, rtweet, ggmap,
+               DT, tmaptools, onemapsgapi, httr,
+               pracma,smooth, Mcomp, astsa)
+```
+
+## Import
+
+Then, we imported our dataset.
+
+```{r}
+Resale_data <- read_csv("HDB Resale Prices.csv")
+```
+
+In order to study the impact of COVID on HDB resale price, we will need to first determine the factors that have been affecting HDB resale prices before COVID.
+
+Making reference to the analysis done by Tian Jie (2019) in his article 'Predicting Singapore HDB Resale Prices:EDA and Modeling', we intend to carry out the following:
+
+(1) test his model to see if the factors are still relevant (from 01 Jan 2019 onwards)
+
+(2) study the impact of COVID on these factors
+
+Hence, to recreate the factors he used, we will be transforming the data to retrieve the following information:
+
+(1) Average storey of the category of storeys of transacted unit (Av_storey)
+
+(2) Calculating town premium based on median of transacted price for that town minus median of all transacted prices (town_premium)
+
+(3) Calculating flat model premium based on median of transacted price for that flat model minus median of all transacted prices (model_premium)
+
+However, we will be deviating from his model by:
+
+(1) taking prices per square metre instead of the transacted price itself as we feel it is a better unit of measurement (ppsqm)
+
+(2) taking distance of transacted from nearest MRT(mrt_dist), nearest mall (mall_dist) and CBD(raffles_dist), dist instead of calculating the walking time/ travelling time
+
+
+In addition, we will also be taking into account inflation by adjusting the following based on consumer index:
+
+(1) Resale Price (adj_ppsqm)
+
+(2) Town Premium (town_premium)
+
+(3) Model Premium (model_premium)
+
+
+As highlighted by Tian Jie, the 4 Room flat types is the most popular flat type in Singapore. As such, we will also be focusing on 4 Room HDB Flats for our analysis. To study the impact of COVID, we will be studying transactions of HDB from 01 Jan 2019 onwards (~ 1 year plus before and after start of CB (7th April 2020)). 
+
+
+
+```{r}
+
+Resale_data <- Resale_data%>% 
+  mutate(Date= as_date(paste(month, '-01', sep = ""), format = "%Y-%m-%d"),
+         ppsqm = resale_price/ floor_area_sqm)
+
+Resale <- Resale_data %>% 
+  mutate(Long = NA, 
+  Lat = NA,
+  address= paste(block, street_name, sep = " ")) %>% 
+  filter(Date >='2019-01-01') %>% 
+  filter(flat_type == '4 ROOM')
+```
+
+## Tidy & Transform
+To find the distance to the nearest MRT/mall and to Raffles place, we will first need to extract the longitude and latitude of the address of each transacted unit as well as of all the MRT stations and malls in Singapore. 
+
+We will be doing so from One Map. We used (`Get`) to extract the Longitude and Latitude of the each transacted units from One Map and store it into the Longtitude and Latitude columns. The dataframe was saved as csv and loaded in. The method of extraction of the data can be found in Appendix A.
+```{r}
+Resale <- read_csv('ResaleVal.csv')
+```
+Similarly, we will be extracting the longitudes and latitudes of all the malls in Singapore based on the list of malls in Singapore as found on Wikipedia.
+```{r}
+malls<- read_csv("Shopping Malls.csv") %>% 
+  mutate(mall_Long = NA, 
+         mall_Lat = NA)
+
+for(i in 1:nrow(malls)){
+  tryCatch({
+    query <- list('searchVal' = malls$`Shopping Malls`[i], 'returnGeom' = 'Y', 'getAddrDetails' = 'N', 'pageNum' = '1')
+    res <- GET(map_url, query = query, verbose())
+    malls$mall_Long[i] = content(res)$results[[1]]$LONGTITUDE[1]
+    malls$mall_Lat[i] =content(res)$results[[1]]$LATITUDE[1]},
+    error = function(e){})
+}
+
+
+malls <- malls %>% mutate(mall_Long = as.numeric(mall_Long),
+                          mall_Lat = as.numeric(mall_Lat)) %>% 
+  drop_na(mall_Long)
+```
+The MRT stations in Singapore and their relevant longitudes and latitudess have been made available by Hui Xiang Chua on data.world. We will use this data for our study.
+```{r}
+mrt <-read_csv("mrtsg.csv") %>% 
+  mutate(Longitude = as.numeric(Longitude),
+         Latitude = as.numeric(Latitude))
+```
+
+To calculate the distance between two points using the longitude and latitude of each point, we will be using the following formulae: 
+
+$$
+\begin{eqnarray}
+\sqrt(((Long_1-Long_2)*110.574)^2-((Lat_1-Lat_2)*111.32)^2)
+\end{eqnarray}
+$$
+  
+We will use the formula to find the shortest distance to an MRT and mall (thereby finding the distance to the nearest MRT/mall). We will also use the formula to find the distance to Raffles. Similarly, the dataframe was saved as csv and loaded in. The method of extraction of the data can be found in Appendix B.
+```{r}
+Resale_Var<- read_csv("ResaleVariables.csv")
+
+##Dist from Raffles MRT (CBD) ----
+raffles_long = as.numeric(mrt$Longitude[135])
+raffles_lat = as.numeric(mrt$Latitude[135])
+
+Resale_Var <- Resale_Var %>% 
+    mutate(raffles_dist = sqrt(((Long - raffles_long)*110.574)^2+((Lat -     raffles_lat)*111.32)^2))
+```
+
+
+
+Next to calculate the remaining lease of the HDB flat at the point of transaction.
+
+```{r}
+Resale_Var <- Resale_Var %>% 
+  mutate(lease_bal_yrs = str_extract(remaining_lease, "^\\d+(?=\\syears)"),
+         lease_bal_mths = str_extract(remaining_lease, "(?<=years\\s)\\d+"))
+
+Resale_Var$lease_bal_mths <- ifelse(is.na(Resale_Var$lease_bal_mths), "0", 
+                                    as.numeric(Resale_Var$lease_bal_mths))                     
+
+Resale_Var <- Resale_Var %>% 
+  mutate(remaining_lease = as.numeric(lease_bal_yrs) + 
+           as.numeric(lease_bal_mths)/12)
+```
+
+From the data, the storey of the transacted prices of HDB resale were in provided in the form of category of storey range (e.g. 01 TO 03). We will hence tidy and transform this information by calculating the average storey for each storey range category.
+
+```{r}
+##Average Storey----
+Resale_Var <- Resale_Var %>% 
+  mutate(Av_storey = (as.numeric(substr(storey_range,0,2))+as.numeric(substr(storey_range,7,8)))/2)
+```
+Then, we added data for SIBOR rates into our data, joined to our current data by Date (i.e. month).
+```{r}
+##SOR Rates----
+
+Sibor <- read_csv("SIBOR16-21.csv")
+
+Sibor <- Sibor %>% 
+  mutate(`SIBOR DATE` = as_date(`SIBOR DATE`, format = "%d/%m/%Y"))%>% 
+  mutate(Month = format(`SIBOR DATE`, "%m"),`Year` = format(`SIBOR DATE`, "%Y")) %>% 
+  group_by(Year, Month) %>% 
+  summarise(`SIBOR 3M` = mean(`SIBOR 3M`)) %>% 
+  mutate(Date = as_date(paste(Year, Month, '01', sep = "-"),format = "%Y-%m-%d")) %>% 
+  select(Date, `SIBOR 3M`)
+
+Resale_Var <- Resale_Var %>% 
+  left_join(Sibor, by = 'Date')
+```
+Then, we adjust the price per square metre using CPI to account for inflation.
+```{r}
+
+##Adjust for CPI----
+
+
+CPI <- read_csv("CPI.csv")
+
+CPI <- CPI %>% 
+  filter(str_detect(`Data Series`, string = "All Items")) %>% 
+  t() 
+
+CPI<- as.tibble(cbind(rownames(CPI), CPI))
+
+colnames(CPI) <- c('Date', 'CPI_val')
+
+CPI <- CPI[-1,]
+
+CPI <-CPI %>%
+  mutate(`Year` = as.character(substr(`Date`,1,4)), `Month` = substr(`Date`, 6,9)) %>% 
+  mutate(`Date` = as_date(paste('01', `Month`,`Year`, sep = "/"), format = "%d/%b/%Y")) %>% 
+  mutate(`Month` = format(`Date`,"%m")) %>% 
+  mutate(`CPI_val` = as.numeric(`CPI_val`))
+
+Resale_Var <- Resale_Var %>% 
+  left_join(CPI, by = 'Date') %>% 
+  mutate(adj_ppsqm = ppsqm/CPI_val*100)
+ 
+Resale_Var <- Resale_Var %>% 
+  filter(Date < '2021-10-01') #no CPI data from 2021-10-01 onwards
+```
+
+For town premium and model premium (additional price payable (or discount enjoyed) as compared to the median for units in that town/flat model), we will be using the same formula for data transformation as had been used by Tian Jie in his model:
+
+
+$$
+\begin{eqnarray}
+town\_premium = (median\_town - median\_all) \\
+model\_premium = (median\_flat\_model - median\_all) 
+\end{eqnarray}
+$$
+
+```{r}
+##town and flat model premiums----
+
+Resale_preCOVID<- Resale_Var %>% 
+  filter(Date < '2021-04-01')
+
+glimpse(Resale_Var)
+
+medianppsqm<- median(Resale_Var$adj_ppsqm)
+
+town_premium <- Resale_Var %>% 
+  group_by(town) %>% 
+  summarise(town_premium = (median(adj_ppsqm)- medianppsqm))
+
+model_premium <- Resale_Var %>% 
+  group_by(flat_model) %>% 
+  summarise(model_premium = (median(adj_ppsqm)- medianppsqm))
+
+Resale_Var_all <- Resale_Var %>%
+  left_join(town_premium, by = 'town') %>% 
+  left_join(model_premium, by = 'flat_model')
+```
+Next, to:
+(1) break our data into two main categories, before the start of circuit breaker in April 2021 and after the start of circuit breaker, and
+(2) to calculate the number of months since the start of circuit breaker in April 2020. 
+```{r}
+Resale_Var_all <- Resale_Var_all %>% 
+  mutate(CB = as.factor(case_when(Date<'2020-04-01' ~ 0,
+                                  Date >= '2020-04-01'~1)))
+                      
+##months from start of CB----
+CB_Mths <- Resale_Var %>%
+  filter(Date>='2020-04-01') %>% 
+  group_by(Date) %>% 
+  summarise(median_adj_ppsqm = median(adj_ppsqm)) %>% 
+  mutate(mth_fr_CB = NA)
+
+for(i in 1:nrow(CB_Mths)){
+  CB_Mths$mth_fr_CB[i] = i
+}
+
+
+Resale_Var_all <- Resale_Var_all %>% 
+  left_join(CB_Mths, by = 'Date')
+
+for(i in 1:11603){
+    Resale_Var_all$mth_fr_CB[i] = 0
+}
+```
+
+Lastly, to classify the town of which the transacted unit was located in into estate types (mature/non-mature).
+```{r}
+library(rvest)
+library(stringr)
+
+estate <- 
+  "https://www.redbrick.sg/blog/mature-vs-non-mature-estates-which-one-trumps-the-other/" %>%
+  read_html() %>% 
+  html_node("table") %>% 
+  html_table() 
+
+estate <- slice(estate, -1) %>% 
+  rename(Matured= X1,
+         Non_matured = X2) %>% 
+  print(n = nrow(.))
+
+estate$Matured <- gsub("[\n]", ", ", estate$Matured) 
+
+estate$Matured <-toupper(estate$Matured)
+
+estate$Non_matured <- gsub("[\n]", ", ", estate$Non_matured) 
+
+estate$Non_matured <-toupper(estate$Non_matured)
+
+matured_estate <- estate %>% 
+  mutate(matured = strsplit(as.character(`Matured`), ", ")) %>% 
+  unnest() %>% 
+  select(-`Matured`, -`Non_matured`) 
+
+matured_estate <- rename(matured_estate, `town`= `matured`) %>%
+  mutate(estate = c("matured"))
+
+matured_estate$town[matured_estate$town == "CENTRAL"] <- "CENTRAL AREA"
+matured_estate$town[matured_estate$town == "KALLANG"] <- "KALLANG/WHAMPOA"
+
+non_matured_estate <- estate %>% 
+  mutate(non_matured = strsplit(as.character(`Non_matured`), ", ")) %>% 
+  unnest() %>% 
+  select(-`Non_matured`, -`Matured`) 
+
+non_matured_estate <- rename(non_matured_estate, `town`= `non_matured`) %>%
+  mutate(estate = c("non-matured"))
+
+estate_list <- bind_rows(matured_estate, non_matured_estate)
+
+Resale_Var_all <- Resale_Var_all %>% 
+  left_join(estate_list)
+```
+
+We remove unnecessary variables and store our dataframe in object (`Variables`) follows:
+```{r}
+Variables <- Resale_Var_all %>% 
+  select(-lease_bal_yrs, -lease_bal_mths, -Year.x, -Year.y, -Month, -median_adj_ppsqm)
+```
+## Regression Model
+
+For the preparation of the model, we created and ran a correlational matrix, to see how our variables of interest (within the model) are related.
+
+```{r}
+
+Model <- Variables %>% 
+  drop_na() %>% 
+  select(remaining_lease, adj_ppsqm, mrt_dist, mall_dist, 
+         raffles_dist, Av_storey, town_premium, model_premium,
+         `SIBOR 3M`,CB) 
+         
+Model %>% 
+  as.matrix(.) %>% 
+  rcorr(.) %>% 
+  tidy(.) %>% 
+  rename(variable_1 = column1,
+         variable_2 = column2,
+         corr = estimate) %>%
+  mutate(abs_corr = abs(corr)
+  ) %>%
+  datatable(options = list(scrollX = T),
+  ) %>% 
+  formatRound(columns = c("corr", "p.value", "abs_corr"), 
+              digits = 3)
+```
+
+The correlation matrix suggest that there is no linear correlation between the factors. Tian Jie found in his study that remaining lease, walking time to MRT and walking time to closest mall were the factors affecting HDB resale prices the most. Hence, our subsequent analysis, we will be focusing only on the following factors: (1) remaining lease (2) distance to nearest MRT (3) distance to nearest mall. 
+
+We performed mean-centering transformations on the variables that will be turned into interaction terms.
+
+```{r}
+Variables_cc <- Variables %>% 
+  select(adj_ppsqm, CB, remaining_lease, mrt_dist, mall_dist) %>% 
+  mutate_at(vars(remaining_lease:mall_dist),
+            ~(. - mean(.,na.rm=T)))
+```
+
+### Specify OLS model
+
+We ran two regression models. The first regressed the before/after Circuit Breaker factor and the above identified factors onto the inverse of adjusted price of resale per square metre (`Model1`). 
+
+$$
+\begin{eqnarray}
+\widehat{\frac{1}{adj\_ppsqm}} = intercept + b_1CB + b_2remaining\_lease + b_3mrt\_dist + b_4mall\_dist + \epsilon
+\end{eqnarray}
+$$
+In the second model, we regressed the before/after Circuit Breaker factor, the above identified factors, as well as the interaction terms onto the inverse of adjusted price of resale per square metre (`Model1_int`). 
+
+$$
+\begin{eqnarray}
+\widehat{\frac{1}{adj\_ppsqm}} = intercept + b_1CB + b_2remaining\_lease + b_3mrt\_dist + b_4mall\_dist + \\
+b_1CB \times b_2remaining\_lease + b_1CB \times b_3mrt\_dist + b_1CB \times b_4mall\_dist + \epsilon
+\end{eqnarray}
+$$
+```{r}
+Model1 <-  lm((1/adj_ppsqm)~ CB+remaining_lease+mrt_dist+mall_dist, Variables_cc)
+
+tidy(Model1) %>% as_tibble()
+
+glance(Model1)
+
+```
+
+```{r}
+Model1_int <-  lm((1/adj_ppsqm)~ CB*(remaining_lease+mrt_dist+mall_dist), Variables_cc)
+
+tidy(Model1_int) %>% as_tibble()
+
+glance(Model1_int)
+```
+
+The results of the analysis suggest that the regression model is not a good fit of our data. Assumption checks further proof this.
+
+### Assumption Check
+
+```{r fig.align = "center", fig.width = 10, fig.height= 10}
+gvlma(Model1_int)
+
+theme_set(theme_fivethirtyeight())
+
+autoplot(gvlma(Model1_int))
+```
+## Non-linear Distribution Model
+
+### Specify Poisson Model
+Again, we run two models, this time in the form of Poisson Distribution. 
+
+In the first model, we model the before/after Circuit Breaker factor and the above identified factors against the adjusted price of resale per square metre in the form of Poisson Distribution (`Model2`). 
+
+In the second model, we model the before/after Circuit Breaker factor, the above identified factors, aas well as the interaction terms against the adjusted price of resale per square metre in the form of Poisson Distribution (`Model2_int`). 
+
+
+```{r}
+Model2 <- Variables_cc %>% 
+  glm(adj_ppsqm ~ CB+remaining_lease+mrt_dist+mall_dist,
+      data = .,
+      family = poisson(link = "log"))
+
+
+Model2_int <- Model %>% 
+  glm(adj_ppsqm ~ CB*(remaining_lease+mrt_dist+mall_dist),
+      data = .,
+      family = poisson(link = "log"))
+```
+
+### Specify Gamma Model
+We repeated the same, this time to model for Gamma Distribution.
+
+In the first model, we model the before/after Circuit Breaker factor and the above identified factors against the adjusted price of resale per square metre in the form of Gamma Distribution (`Model3`). 
+
+In the second model, we model the before/after Circuit Breaker factor, the above identified factors, aas well as the interaction terms against the adjusted price of resale per square metre in the form of Gamma Distribution (`Model3_int`). 
+
+```{r}
+Model3 <- Variables_cc %>% 
+  glm(adj_ppsqm ~ CB+remaining_lease+mrt_dist+mall_dist,
+      data = .,
+      family = Gamma(link = "inverse"))
+
+
+Model3_int <- Variables_cc %>% 
+  glm(adj_ppsqm ~ CB*(remaining_lease+mrt_dist+mall_dist),
+      data = .,
+      family = Gamma(link = "inverse"))
+```
+
+### Comparison of Models
+We compare the 4 models to select the best model. Based on the AIC values of the 4 models, we find that the Gamma Distribution with Interactions (`Model3_int`) is the best Model.
+```{r}
+export_summs(Model2, Model2_int, Model3, Model3_int,
+             model.names = c("Poisson\nMain Effects only",
+                             "Poisson\nwith Interactions",
+                             "Gamma\nMain Effects only",
+                             "Gamma\nwith Interactions"),
+             error_format = "[{conf.low}, {conf.high}]",
+             digits = 10
+)
+```
+
+### Comparison of Gamma Model with and without Interactions
+```{r fig.align = "center", fig.width = 10, fig.height= 10}
+plot_summs(Model3, Model3_int, 
+           scale = T,
+           plot.distributions = T,
+           model.names = c("Main Effects Only", "with Interactions")) +
+  theme(legend.position = "top")
+```
+
+### Check Multicollinearity
+```{r fig.align = "center", fig.width = 10, fig.height= 10}
+vif(Model3);vif(Model3_int)
+```
+
+### Report the Results with `kable` in `R Markdown`
+We tabulate the results of our selected model below.
+
+```{r, align = "center"}
+library(knitr)
+library(kableExtra)
+
+kable(tidy(Model3_int))%>%
+  kable_styling("striped", full_width = T, fixed_thead = T) %>%
+  column_spec(c(1, 5), bold = T) %>%
+  row_spec(c(1, 3, 5, 7), bold = T, color = "white", background = "darkgrey")
+
+kable(glance(Model3_int))%>%
+  kable_styling("striped", full_width = T, font_size = 12) %>%
+  column_spec(c(2,4,6,8), bold = T, color = "white", background = "darkgrey")
+```
+
+---
+To see the patterns of interaction of our selected variables in our model, we visualized them in the next chapter. We will start with a general visualistion of the price trends pre and post Covid, before zooming in to the interactions of before/after Covid as a factor against the other factors that we highlighted in our model.
+
+## Visualize
+
+### Prelude: A visualisation of Price Trend with and Witout Covid
+First we reload the data to include period from 2015.
+```{r}
+resale_fr15 <- rbind(read_csv("resale-flat-prices-based-on-registration-date-from-jan-2015-to-dec-2016.csv"),
+                     read_csv("HDB Resale Prices.csv")) %>% 
+  mutate(Date= as_date(paste(month, '-01', sep = ""), format = "%Y-%m-%d"),
+         ppsqm = resale_price/ floor_area_sqm) %>% 
+  left_join(CPI, by = 'Date') %>% 
+  mutate(adj_ppsqm = ppsqm/CPI_val*100) 
+```
+Then we find the mean of the adjusted price per square metre per month for each month. We use data from before March 2020 to extrapolate our exected trendline for HDB resale price if COVID-19 had not occurred. As mentioned earlier, we will only be focusing our data on 4 Room HDB Resale flats.
+```{r}
+elapsed_months <- function(end_date, start_date) {
+  ed <- as.POSIXlt(end_date)
+  sd <- as.POSIXlt(start_date)
+  12 * (ed$year - sd$year) + (ed$mon - sd$mon)
+}
+
+resale_fr15 <-resale_fr15 %>%
+  mutate(Months = as.numeric(elapsed_months(Date, '2015-12-31'))) %>% 
+  filter(flat_type == '4 ROOM') %>% 
+  group_by (Date, town, storey_range) %>% 
+  summarise(av_adj_ppsqm = mean(adj_ppsqm))
+
+resale_fr15 <-resale_fr15 %>%
+  group_by (Date) %>% 
+  summarise(av_adj_ppsqm = mean(av_adj_ppsqm))
+
+
+data_before_COVID <- ts(resale_fr15$av_adj_ppsqm, 
+                        start =c(2016,01),
+                        end =c(2020,03), 
+                        frequency = 12)
+
+
+library(forecast)
+model_before_COVID <- tbats(data_before_COVID)
+
+set.seed(20210428)
+
+px_hat <- as.tibble(forecast(model_before_COVID, h = 20))
+
+extrapolate_period = resale_fr15 %>% 
+  filter(Date > '2020-02-29') %>% 
+  mutate(Months = as.numeric(elapsed_months(Date, '2020-03-31'))) 
+
+extrapolated_Px <-data.frame(Date = as_date(unique(extrapolate_period$Date),format = "%Y-%m-%d"),
+                             px_hat)
+
+base <- resale_fr15 %>%
+  filter(Date >= '2016-01-01') %>% 
+  group_by(Date) %>% 
+  summarise(av_adj_ppsqm = mean(av_adj_ppsqm))
+
+
+ymin = extrapolated_Px$Point.Forecast[extrapolated_Px$Date =='2021-07-01']
+
+ymax = base$av_adj_ppsqm[base$Date == '2021-07-01']
+```
+Finally we plot two lines for the trend line for the mean of HDB Resale Prices as well as our extrapolated data from before COVID-19 occurred (before March 2020). We can then visualise the difference in HDB Prices after COVID-19 as compared to what we would have expected. 
+```{r}
+base %>% 
+  ggplot()+
+  geom_line(aes(x = Date,
+                y = av_adj_ppsqm),
+            color = 'navyblue',
+            size = 1.1)+
+  geom_line(data = extrapolated_Px,
+            aes(x = Date,
+                y=Point.Forecast),
+            color = 'firebrick3',
+            lty = 5,
+            size = 1.5)+
+  geom_segment(aes(x =as_date('2021-07-01', format= "%Y-%m-%d"), 
+                   xend = as_date('2021-07-01', format= "%Y-%m-%d"),
+                   y = ymin,
+                   yend = ymax),
+               arrow = arrow(length=unit(0.20,"cm"), 
+                             ends=c("first", "last"),
+                             type = "closed"),
+               color = 'grey40')+
+  scale_x_date(date_breaks = "3 month", date_label = "%b-%Y")+
+  ylab("Price of Resale \n Adjusted for CPI (base 2019)/ \n per sq metre") +
+  xlab("Date (Month-Year)") +
+  labs(title = "HDB Resale Prices for Years 2016 to 2021",
+       subtitle = "Analsysis of the impact of Covid on Resale Prices")+
+  geom_text(x = as_date('2021-09-01', format= "%Y-%m-%d"),
+            y = 5650,
+            label = "Price Deviation During COVID-19\nCompared To Expected Without COVID-19",
+            angle = 270,
+            color = 'grey40',
+            size = 2.2)+
+  geom_text(x = as_date('2021-03-01', format= "%Y-%m-%d"),
+            y = 6160,
+            label = "HDB Resale Prices",
+            color = 'navyblue',
+            size = 3)+
+  geom_text(x = as_date('2021-03-01', format= "%Y-%m-%d"),
+            y = 5100,
+            label = "Extrapolated HDB Resale Prices \n without COVID-19",
+            color = 'firebrick3',
+            size = 3)+
+  ggthemes::theme_fivethirtyeight() +     
+  theme(axis.text.x = element_text(angle=90, hjust=1, size = 8),
+        axis.text.y = element_text(size = 8),
+        axis.title.y = element_text(size = 10),
+        axis.title.x = element_text(size = 10))
+```
+
+The time graph suggests that during the period COVID-19, we experienced a substantial increase in HDB Resale Prices. We can visualise this using box plot as well.
+
+```{r}
+base %>% mutate(CB = (case_when(Date<'2020-04-01' ~ 'Before',
+                                Date >= '2020-04-01'~'After'))) %>% 
+  ggplot(aes(x = CB, y = av_adj_ppsqm, fill = CB))+
+  geom_boxplot(width = 0.3,
+               show.legend = FALSE)+
+  ggthemes::theme_fivethirtyeight()  +
+  labs(title = "Comparison of 4 Room HDB Resale Prices \nPre and Post COVID",
+       caption = "Source: Data.gov & HDB website",
+       x = "Circuit Breaker",
+       y = "Prices adjusted for CPI ($/sqm)")
+```
+
+
+Next, lets proceed to further visualise how COVID-19 impacted the factors affecting HDB Resale Prices. We will be focusing on comparing Circuit Breaker (CB) against the Remaining Lease of the HDB unit and distance from MRT as these two factors have a larger impact on prices based on our selected model. As stated earlier, we will be focusing on data from 1st January 2019. 
+ 
+### Comparison 1: Remaining Lease X CB
+Based on the the model we had selected previously, we plotted an interaction plot of the before/after Circuit Breaker and remaining lease against adjusted price per square metre to find the price change after Circuit Breaker as compared to before.
+
+We find that the Circuit Breaker was mainly related to an increase in the y-intercept; the gradient of the relationship between remaining lease and adjusted price per square metre is also slightly steeper for after Circuit Breaker than before Circuit Breaker.
+
+```{r}
+set.seed(20210427)
+
+interact_plot(Model3_int, 
+              pred = "remaining_lease",
+              modx = "CB", 
+              modx.labels = c("Before CB",
+                              "After CB"),
+              interval = T, 
+              int.width = 0.95,
+              colors = c("tomato3", 
+                         "deepskyblue4"),
+              vary.lty = T,
+              line.thickness = 1,
+              legend.main = "",              
+              plot.points = F) +
+  labs(title = "Interplay of Remaining Lease of\nResale Flats and CB period",
+       subtitle = paste0("Prices of HDB Resale is higher after CB than before for ",
+                         "the same remaining lease"),
+       caption = "Source: Data.gov & HDB website",
+       x = "Remaining Lease of Resale Flats (yrs)",
+       y = "Resale Price ($/sqm)") +
+  ggthemes::theme_fivethirtyeight()  +
+  theme(legend.position = "top",
+         axis.text.y = element_text())
+```
+
+### Comparison 2: Distance to MRT X CB
+
+Based on the selected model above we plotted an interaction plot of the before/after Circuit Breaker and distance from MRT against adjusted price per square metre to find the price change after Circuit Breaker as compared to before.
+
+We find that similarly, the y-intercept for the adjusted price per square metre for HDB resale is greater after Circuit Breaker than before. The difference in price after Circuit Breaker as compared to before Circuit Breaker is also greater as distance between the unit and MRT increases.
+
+```{r}
+set.seed(20210427)
+
+interact_plot(Model3_int, 
+              pred = "mrt_dist",
+              modx = "CB", 
+              modx.labels = c("Before CB",
+                              "After CB"),
+              interval = T, 
+              int.width = 0.95,
+              colors = c("tomato3", 
+                         "deepskyblue4"),
+              vary.lty = T,
+              line.thickness = 1,
+              legend.main = "",              
+              plot.points = F) +
+  labs(title = "Interplay of Distance from MRT of\nResale Flats and CB period",
+       subtitle = paste0("Prices of HDB Resale is higher after CB than before for ",
+                         "the same distance from MRT"),
+       caption = "Source: Onemap.sg, Data.gov & HDB website",
+       x = "Distance from MRT",
+       y = "Resale Price ($/sqm)") +
+  ggthemes::theme_fivethirtyeight()  +
+  theme(legend.position = "top",
+        axis.text.y = element_text())
+```
+
+
+
+### Extension of analysis to compare against private market
+
+We then did a comparison of the trend of price increase in HDB Resale Prices during this Covid period against that of condominiums. 
+
+First, we extract the data to find the mean of prices for HDB Resale and Private Condominium. As data for private condominium was not classified by room type, therefore, our data for HDB resale would not be limited to 4 rooms either.
+```{r}
+
+resale_after16<-read_csv("HDB Resale Prices.csv") %>% 
+  mutate(Date= as_date(paste(month, '-01', sep = ""), format = "%Y-%m-%d"),
+         ppsqm = resale_price/ floor_area_sqm) %>% 
+  left_join(CPI, by = 'Date') %>% 
+  mutate(adj_ppsqm = ppsqm/CPI_val*100) %>% 
+  group_by (Date, town, storey_range) %>% 
+  summarise(av_adj_ppsqm = mean(adj_ppsqm))
+
+resale_after16 <- resale_after16 %>% 
+  group_by(Date) %>% 
+  summarise(resale_ppsqm = mean(av_adj_ppsqm)) 
+
+URA_px <- dir(pattern = "URA_.*\\.csv") %>% 
+  map(read_csv) %>% 
+  reduce(rbind) 
+
+non_HDB_px <- URA_px %>% 
+  filter(`Type of Sale` == "New Sale") %>% 
+  filter(`Type of Area` == "Strata") %>% 
+  mutate(Date = as_date(paste('01', `Date of Sale`, sep = "-"),format = "%d-%b-%y")) %>% 
+  left_join(CPI, by = 'Date') %>% 
+  mutate(ppsqm = `Unit Price ($psf)` * 10.764) %>% 
+  mutate(adj_ppsqm = ppsqm/CPI_val*100) %>% 
+  group_by(Date, `Postal District`,`Floor Level`) %>% 
+  summarise(av_adj_ppsqm = mean(adj_ppsqm))
+
+non_HDB_px <- non_HDB_px %>% 
+  group_by(Date) %>% 
+  summarise(non_HDB_ppsqm = mean(av_adj_ppsqm))  
+  
+```
+
+Then, we visualise the price trends for HDB Resale Prices, Prices of new Condominium launches, as well as the percentage price difference between HDB Resale prices and that of new Condominiums.
+
+```{r}
+resale_plot <- resale_after16 %>% 
+  filter(Date>='2019-01-01') %>% 
+  ggplot()+
+  geom_point(aes(x = Date,
+                 y = resale_ppsqm),
+             alpha=0.2,
+             color = 'darkslateblue')+
+  geom_smooth(aes(x = Date,
+                y = resale_ppsqm),
+            color = 'darkslateblue')+
+  geom_segment(aes(x =as_date('2020-04-07', format= "%Y-%m-%d"), 
+                   xend = as_date('2020-04-07', format= "%Y-%m-%d"),
+                   y =4800,
+                   yend = 6800),
+               color = 'gold2',
+               linetype = "dashed",
+               size = 1)+
+  scale_x_date(date_breaks = "4 month", date_label = "%b-%Y")+
+  ylab("Price of Resale Adjusted for CPI (base 2019) ($/sqm)") +
+  xlab("Date") +
+  labs(title = "Prices of HDB Resale",
+       size =5)+
+  geom_text(x = as_date('2020-04-20', format= "%Y-%m-%d"),
+            y = 4900,
+            label = "start of circuit \nbreaker",
+            color = 'grey40',
+            hjust = 0,
+            size = 3)+  
+  ggthemes::theme_fivethirtyeight() +     
+  theme(axis.text.x = element_text(angle=90, hjust=1, size = 8),
+        axis.text.y = element_text(size = 8),
+        axis.title.y = element_text(size = 10),
+        axis.title.x = element_text(size = 10),
+        title = element_text(size=6)) 
+
+non_HDB_plot <- non_HDB_px %>% 
+  filter(Date>='2019-01-01') %>% 
+    ggplot()+
+  geom_point(aes(x = Date,
+                 y = non_HDB_ppsqm),
+             alpha=0.2,
+             color = 'brown4')+
+  geom_smooth(aes(x = Date,
+                  y = non_HDB_ppsqm),
+              color = 'brown4')+
+  geom_segment(aes(x =as_date('2020-04-07', format= "%Y-%m-%d"), 
+                   xend = as_date('2020-04-07', format= "%Y-%m-%d"),
+                   y =18700,
+                   yend = 23200),
+               color = 'gold2',
+               linetype = "dashed",
+               size = 1)+
+  scale_x_date(date_breaks = "4 month", date_label = "%b-%Y")+
+    ylab("Price of new Condominium Adjusted for CPI (base 2019) ($/sqm)") +
+    xlab("Date") +
+    labs(title = "Prices of Condominium \n(New)",
+         size = 5)+
+  geom_text(x = as_date('2020-04-20', format= "%Y-%m-%d"),
+            y = 19000,
+            label = "start of circuit \nbreaker",
+            color = 'grey40',
+            hjust = 0,
+            size = 3)+  
+    ggthemes::theme_fivethirtyeight() +     
+    theme(axis.text.x = element_text(angle=90, hjust=1, size = 8),
+          axis.text.y = element_text(size = 8),
+          axis.title.y = element_text(size = 10),
+          axis.title.x = element_text(size = 10),
+          title = element_text(size=6))   
+
+diff <- non_HDB_px %>% 
+  inner_join(resale_after16) %>% 
+  mutate(diff_ppsqm = (non_HDB_ppsqm-resale_ppsqm),
+         ptg_dif = (diff_ppsqm/resale_ppsqm*100))
+
+diff_plot <- diff %>% 
+  filter(Date>='2019-01-01') %>% 
+  ggplot()+
+  geom_point(aes(x = Date,
+                 y = ptg_dif),
+             alpha=0.2,
+             color = 'aquamarine4')+
+  geom_smooth(aes(x = Date,
+                y = ptg_dif),
+            color = 'aquamarine4')+
+  geom_segment(aes(x =as_date('2020-04-07', format= "%Y-%m-%d"), 
+                   xend = as_date('2020-04-07', format= "%Y-%m-%d"),
+                   y =245,
+                   yend = 320),
+               color = 'gold2',
+               linetype = "dashed",
+               size = 1)+
+scale_x_date(date_breaks = "4 month", date_label = "%b-%Y")+
+  ylab("Percentage difference in price between Condominium and \nHDB Resale (%)") +
+  xlab("Date") +
+  labs(title = "Price difference between \nCondominium (New) & \nHDB Resale")+
+  geom_text(x = as_date('2020-04-20', format= "%Y-%m-%d"),
+            y = 250,
+            label = "start of circuit \nbreaker",
+            color = 'grey40',
+            hjust = 0,
+            size = 3)+  
+  ggthemes::theme_fivethirtyeight() + 
+  theme(axis.text.x = element_text(angle=90, hjust=1, size = 8),
+        axis.text.y = element_text(size = 8),
+        axis.title.y = element_text(size = 10),
+        axis.title.x = element_text(size = 10),
+        title = element_text(size=6)
+        )   
+
+gridExtra::grid.arrange(resale_plot, 
+                        non_HDB_plot,
+                        diff_plot,
+                        ncol = 3,
+                        top = "A comparison between Prices of Resale and Condominium since Year 2019")
+```
+
+## Interpretation of the Results
+
+Our study provides the following findings:
+
+(1) The Circuit Breaker has a positive relationship with the HDB resale prices, where the prices were found to be higher after Circuit Breaker than before. 
+
+(2) From our interaction plot, there is no strong correlation between the Circuit Breaker and the gradient of the relationship between the other factors and HDB resale prices. However, post Circuit Breaker, the intercept of HDB resale prices were higher for the graphs of each factor against HDB Resale prices.
+
+## Implications
+Our model seems to suggest that the Covid-19 pandemic had driven prices of HDB resale higher than anticipated had Covid-19 not occurred, despite the Singapore government's efforts to minimize the impact of Covid-19. Possible reasons could include the delays in BTO as a result of the tightened controls experienced by the construction industry. One example was the issue of dormitory workers that caused on site manpower problems and drove up construction costs. However, a comparison against the private market suggest that the price increase was not unique to HDB resale. The increase in HDB Resale did not make the private market more attractive as an investment since the prices of private property increased as well.
+
+In addition, we are interested to find out whether the spike in resale prices post-CB would make private properties more attractive to buyers. When comparing pre- and post-CB price movements between resale flats and prices of newly launched Condominiums, we found that although prices for both types of properties increased, the percentage price difference between Condominiums and resale actually fell. More buyers may hence consider it more attractive to upgrade to Condominiums during this period.
+
+
+## Limitations and Future Directions
+For our model, we only focus on the sales data of 4-room HDB flats to run our analysis as we have predominantly followed Tian Jie’s model as a starting point. Moving forward, further analysis on other room types could be conducted to get a fuller picture of how Covid-19 has affected the buying sentiments of HDB resale flats. 
+
+We also note the Covid-19 pandemic was an unexpected and unprecedented event. This has resulted in our inability to obtain more data as we only have 2 years of data. This may affect the accuracy of the model. Moreover, the limited data means that we are unable to carry out meaningful extrapolation of data to get an insight of what will happen in the future. 
+
+Lastly, it should be noted that our model only reflects that there was a relationship between the Covid-19 event and resale prices. This does not necessarily mean that Covid-19 had resulted in the increase of resale prices. 
+
+## References
+1) Housing Development Board. (26 Aug 2021). Mitigating the Impact of the Covid-19 Pandemic on HDB Projects. https://www.hdb.gov.sg/cs/infoweb/-/media/doc/CCG/26082021_Annex.pdf
+
+2) Ismail Gafoor, The Business Times. (16 Sep 2021). Is the double-digit growth of HDB resale flat prices sustainable? https://www.businesstimes.com.sg/hub-projects/property-2021-sept-issue/is-the-double-digit-growth-of-hdb-resale-flat-prices
+
+3) The Association of Banks Singapore. (n.d.). ABS CO. - SIBOR AND SWAP OFFER RATES. https://www.abs.org.sg/benchmark-rates/rates-sibor#
+
+4) Department of Statistics Singapore. (n.d.). Prices and Price Indices. https://www.singstat.gov.sg/find-data/search-by-theme/economy/prices-and-price-indices/latest-data
+
+5) Tian Jie. (1 Aug 2019). Predicting Singapore HDB Resale Price: Data Preparation.
+https://towardsdatascience.com/predicting-singapore-hdb-resale-price-data-preparation-be39152b8c69
+
+6) Tian Jie. (3 Aug 2019). Predicting Singapore HDB Resale Price: EDA and Modeling.
+https://towardsdatascience.com/predicting-singapore-hdb-resale-price-eda-and-modeling-94af7d26798d
+
+7) One Map Singapore. (n.d.). https://www.onemap.gov.sg/main/v2/
+
+8) Data.gov.sg. (n.d.). Resale Flat Prices. https://data.gov.sg/dataset/resale-flat-prices
+
+9) Hui Xiang Chua. (n.d.). COVID-19 Singapore.
+https://data.world/hxchua/covid-19-singapore
+
+10) Hui Xiang Chua. (n.d.). Train Stations in Singapore.
+https://data.world/hxchua/train-stations-in-singapore# (long and lat of all trai nstations)
+
+10) Wikipedia. (30 Oct 2021). List of shopping malls in Singapore. https://en.wikipedia.org/wiki/List_of_shopping_malls_in_Singapore
+
+11) Wikipedia. (26 Nov 2021). COVID-19 pandemic in Singapore. 
+https://en.wikipedia.org/wiki/COVID-19_pandemic_in_Singapore
+
+11) Urban Redevelopment Authority. (n.d.). Private Residential Property Transactions.  https://www.ura.gov.sg/realEstateIIWeb/transaction/search.action 
+
+## Appendix
+### Appendix A: Extraction of longitude and latitudes of HDB Resale units transacted using Onemap.sg
+```{r}
+# map_url <- "https://developers.onemap.sg/commonapi/search"
+# 
+# for(i in 1:nrow(Resale)){
+#   tryCatch({
+#   query <- list('searchVal' = Resale$address[i], 'returnGeom' = 'Y',     'getAddrDetails' = 'N', 'pageNum' = '1')
+#   res <- GET(map_url, query = query, verbose())
+#   Resale$Long[i] = content(res)$results[[1]]$LONGTITUDE[1]
+#   Resale$Lat[i] =content(res)$results[[1]]$LATITUDE[1]},
+#   error = function(e){})
+#   Resale_copy <- Resale
+#   write_csv(Resale_copy, 'ResaleVal.csv')
+#   }
+```
+
+### Appendix B: Extraction of longitude and latitudes of all malls and MRTs in Singapore and finding distance of nearest mall and MRT to transacted Resale HDB unit
+```{r}
+# Resale_Var=Resale %>% 
+#  mutate(Long = as.numeric(Long),
+#          Lat = as.numeric(Lat),
+#          mrt_dist = NA,
+#          mall_dist = NA)
+# 
+# for(i in 1:nrow(Resale_Var)){
+#    for(j in 1:nrow(mrt)){
+#       distance <- sqrt(((Resale_Var$Long[i] -     mrt$Longitude[j])*110.574)^2 + ((Resale_Var$Lat[i] -         mrt$Latitude[j])*111.32)^2)
+#       if (is.na(Resale_Var$mrt_dist[i]) == TRUE){
+#         Resale_Var$mrt_dist[i] = distance}
+#         else if (Resale_Var$mrt_dist[i] > distance){
+#        Resale_Var$mrt_dist[i] = distance}
+#     }
+# }
+# 
+# for(i in 1:nrow(Resale_Var)){
+#   for(j in 1:nrow(malls)){
+#     distance <- sqrt(((Resale_Var$Long[i] -   malls$mall_Long[j])*110.574)^2 + ((Resale_Var$Lat[i] -     malls$mall_Lat[j])*111.32)^2)
+#     if (is.na(Resale_Var$mall_dist[i]) == TRUE){
+#       Resale_Var$mall_dist[i] = distance}
+#     else if (Resale_Var$mall_dist[i] > distance){
+#     Resale_Var$mall_dist[i] = distance}
+#    }
+# }
+# 
+# Resale_Var_copy <- Resale_Var
+# write_csv(Resale_Var,"ResaleVariables.csv")
+```
+
+### Session Info
+SessionInfo()
+
+## Contribution Statement
+### Wai Yee Contribution
+
+1) Write up on Problem Statement
+
+2) Import, tidy and transforming HDB resale properties
+
+3) Import, tidy and transforming private property sales data from URA website from 1998 to Oct 2021
+
+4) Transforming HDB towns to districts as per URA’s defined list by scrapping information and table found on the internet
+
+5) Splitting HDB towns into matured and non-matured estates by scrapping information and table found on the internet 
+
+6) Transforming remaining lease years of resale flats
+
+7) Checked for multicollinearity of selected model
+
+8) Visualisation of remaining lease X CB
+
+9) Modeling of data for private vs resale
+
+10) Visualising resale vs EC prices for the period 1998 – Oct 2021
+
+11) Write-up on Interpretation of results, Implications and Limitations
+
+
+
+### Zhi Yi Contribution
+
+1) Write up on Problem Statement
+
+2) Import, tidy, and transform CPI and SIBOR Rates and joined data to include all variables in dataframe
+
+3) Import, tidy, and transform Data for Singapore Malls and MRT stations
+
+4) Extract longitude and latitude points using One Map into data and calculate distances
+
+5) Adjusted prices of private and resale to account for inflation using CPI
+
+6) Transformation of data based on Circuit Breaker using 0 to denote before CB and 1 to denote after CB
+
+7) Tabulated Correlation Matrix
+
+8) Mean-centered data and came up with different models
+
+9) Tested assumptions of models and compared between them to find the best fit model
+
+10) Reporting of results using knitr
+
+11) Visualisation of price trend over time, including transformation of data required to plot graph
+
+12) Visualisation of price difference pre and post COVID via boxplot
+
+13) Visualisation of MRT distance x CB & Visualisation of Mall distance x CB
+
+14) Assisted in modeling of data for private vs resale
+
+15) Assisted in visualisation of private vs resale
+
+16) Assisted in write-up on Interpretation of results, Implications and Limitations
+
+17) Compiled References
+
+18) Combined and Compiled R markdown
+
