@@ -1,6 +1,5 @@
 ---
 title: "Effects Of Covid on the Resale Market"
-author: "Tong Wai Yee, Ho Zhi Yi"
 date: "27 November 2021"
 output:
   html_document:
@@ -994,69 +993,3 @@ https://en.wikipedia.org/wiki/COVID-19_pandemic_in_Singapore
 
 ### Session Info
 SessionInfo()
-
-## Contribution Statement
-### Wai Yee Contribution
-
-1) Write up on Problem Statement
-
-2) Import, tidy and transforming HDB resale properties
-
-3) Import, tidy and transforming private property sales data from URA website from 1998 to Oct 2021
-
-4) Transforming HDB towns to districts as per URA’s defined list by scrapping information and table found on the internet
-
-5) Splitting HDB towns into matured and non-matured estates by scrapping information and table found on the internet 
-
-6) Transforming remaining lease years of resale flats
-
-7) Checked for multicollinearity of selected model
-
-8) Visualisation of remaining lease X CB
-
-9) Modeling of data for private vs resale
-
-10) Visualising resale vs EC prices for the period 1998 – Oct 2021
-
-11) Write-up on Interpretation of results, Implications and Limitations
-
-
-
-### Zhi Yi Contribution
-
-1) Write up on Problem Statement
-
-2) Import, tidy, and transform CPI and SIBOR Rates and joined data to include all variables in dataframe
-
-3) Import, tidy, and transform Data for Singapore Malls and MRT stations
-
-4) Extract longitude and latitude points using One Map into data and calculate distances
-
-5) Adjusted prices of private and resale to account for inflation using CPI
-
-6) Transformation of data based on Circuit Breaker using 0 to denote before CB and 1 to denote after CB
-
-7) Tabulated Correlation Matrix
-
-8) Mean-centered data and came up with different models
-
-9) Tested assumptions of models and compared between them to find the best fit model
-
-10) Reporting of results using knitr
-
-11) Visualisation of price trend over time, including transformation of data required to plot graph
-
-12) Visualisation of price difference pre and post COVID via boxplot
-
-13) Visualisation of MRT distance x CB & Visualisation of Mall distance x CB
-
-14) Assisted in modeling of data for private vs resale
-
-15) Assisted in visualisation of private vs resale
-
-16) Assisted in write-up on Interpretation of results, Implications and Limitations
-
-17) Compiled References
-
-18) Combined and Compiled R markdown
-
